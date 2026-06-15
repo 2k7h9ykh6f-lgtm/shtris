@@ -498,6 +498,12 @@ Options:
                       RULE can be 'extended'(default), 'infinite', 'classic'
  --seed <SEED>        random seed to determine the order of Tetriminos.
                       range from 1 to 4294967295.
+ --daily              play the Daily Challenge. A stable seed is derived from
+                      the local date so the Tetrimino order is the same for
+                      everyone on the same day (in the same environment).
+                      Forces a fixed ruleset: level 1, super rotation,
+                      extended lockdown and colors on.
+                      Cannot be combined with --seed.
  --theme <THEME>      color theme 'standard'(default), 'system'
  --no-color           don't display colors
  --no-beep            disable beep
@@ -627,6 +633,12 @@ theme='standard'
 lands_on=false
 pause=false
 gameover=false
+
+# Daily Challenge: when daily_mode is true, the Tetrimino order is derived from
+# a stable seed based on the local date and a fixed ruleset is forced.
+# daily_date holds the human readable challenge date (YYYY-MM-DD) for display.
+daily_mode=false
+daily_date=''
 
 # Game Over Conditions
 #
@@ -1327,6 +1339,11 @@ process_fallen_piece() {
 draw_scoreboard() {
   set_style bold
   set_color "$SCORE_COLOR"
+  # Mark the scoreboard as a Daily Challenge run, with the challenge date.
+  $daily_mode && {
+    xyprint "$SCORE_X" $((SCORE_Y - 2)) "│DAILY"
+    xyprint "$SCORE_X" $((SCORE_Y - 1)) "│$daily_date"
+  }
   xyprint "$SCORE_X" "$SCORE_Y"       "│SCORE:"
   xyprint "$SCORE_X" $((SCORE_Y + 1)) "│"
   xyprint "$SCORE_X" $((SCORE_Y + 2)) "│"
@@ -2194,6 +2211,14 @@ gameover() {
 quit() {
   running=false # let's stop controller ...
   xyprint $((CENTER_X - 5)) $CENTER_Y 'Game Over!'
+  # On the Daily Challenge end screen, show the challenge date and seed.
+  $daily_mode && {
+    set_style bold
+    set_color "$SCORE_COLOR"
+    xyprint $((CENTER_X - 7)) $((CENTER_Y + 1)) "DAILY $daily_date"
+    xyprint $((CENTER_X - 6)) $((CENTER_Y + 2)) "SEED $bag_random"
+    reset_colors
+  }
   flush_screen
 }
 
@@ -2280,6 +2305,16 @@ receive_pids() {
 }
 
 ready() {
+  # On the Daily Challenge start screen, show the challenge date and seed.
+  $daily_mode && {
+    set_style bold
+    set_color "$SCORE_COLOR"
+    xyprint $((CENTER_X - 7)) $((CENTER_Y - 4)) 'DAILY CHALLENGE'
+    xyprint $((CENTER_X - 5)) $((CENTER_Y - 3)) "$daily_date"
+    xyprint $((CENTER_X - 6)) $((CENTER_Y - 2)) "SEED $bag_random"
+    reset_colors
+  }
+
   # show 'READY' for 1 second.
   xyprint $((CENTER_X - 3)) $CENTER_Y 'READY'
   flush_screen
@@ -2520,6 +2555,7 @@ main() {
   rotate_piece_func=rotate_piece_super
   starting_level=1
   debug=false
+  seed_set=false # whether --seed was given explicitly (conflicts with --daily)
 
   while [ $# -gt 0 ]; do
     case $1 in
@@ -2577,7 +2613,12 @@ main() {
           die_usage "invalid seed '$2'"
         }
         bag_random=$2
+        seed_set=true
         shift 2; continue
+        ;;
+      --daily)
+        daily_mode=true
+        shift; continue
         ;;
       --theme)
         [ $# -le 1 ] && { # if next arg not exists
@@ -2606,6 +2647,30 @@ main() {
       *)            die_usage "unrecognized option '$1'" ;;
     esac
   done
+
+  # Daily Challenge setup (must run after parsing so option order doesn't matter).
+  $daily_mode && {
+    # An explicit --seed would contradict the date-derived seed.
+    $seed_set && die_usage "option '--daily' cannot be combined with '--seed'"
+
+    # Derive a stable seed from the local date as an YYYYMMDD integer
+    # (e.g. 20260615). The same date always yields the same seed, so the
+    # Tetrimino order is identical on a given day in the same environment,
+    # while different dates yield different seeds. YYYYMMDD is always
+    # <= 99991231, well within the valid seed range (1 .. 4294967295), and
+    # never 0, so it never collides with the "not set" sentinel.
+    bag_random=$(date +%Y%m%d)
+
+    # Build the human readable date (YYYY-MM-DD) for display.
+    daily_md=${bag_random#????}
+    daily_date="${bag_random%????}-${daily_md%??}-${daily_md#??}"
+
+    # Force the fixed Daily Challenge ruleset.
+    starting_level=1
+    rotate_piece_func=rotate_piece_super
+    lockdown_rule=$LOCKDOWN_RULE_EXTENDED
+    no_color=false
+  }
 
   $debug echo "=== Debug mode enabled ==="
   initialize
