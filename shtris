@@ -502,6 +502,7 @@ Options:
  --no-color           don't display colors
  --no-beep            disable beep
  --hide-help          don't show help on start
+ --scores             show recent scores and high scores, then exit
 
  -h, --help     display this help and exit
  -V, --version  output version infromation and exit
@@ -627,6 +628,9 @@ theme='standard'
 lands_on=false
 pause=false
 gameover=false
+
+SCORES_FILE="${HOME}/.shtris-scores"
+game_start_time=""
 
 # Game Over Conditions
 #
@@ -2197,6 +2201,63 @@ quit() {
   flush_screen
 }
 
+save_score() {
+  # Determine rotation mode name from function name
+  local rotation_name="" lockdown_name="" end_time=""
+  case "$rotate_piece_func" in
+    *super)   rotation_name="super" ;;
+    *classic) rotation_name="classic" ;;
+    *)        rotation_name="unknown" ;;
+  esac
+  case "$lockdown_rule" in
+    $LOCKDOWN_RULE_EXTENDED) lockdown_name="extended" ;;
+    $LOCKDOWN_RULE_INFINITE) lockdown_name="infinite" ;;
+    $LOCKDOWN_RULE_CLASSIC)  lockdown_name="classic"  ;;
+    *)                       lockdown_name="unknown"  ;;
+  esac
+  end_time=$(date '+%Y-%m-%dT%H:%M:%S' 2>/dev/null) || end_time="unknown"
+
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "${game_start_time}" "${end_time}" \
+    "${rotation_name}" "${lockdown_name}" \
+    "${bag_random}" "${starting_level}" \
+    "${score}" "${level}" "${lines_completed}" \
+    >> "${SCORES_FILE}" 2>/dev/null
+}
+
+show_scores() {
+  if [ ! -f "${SCORES_FILE}" ] || [ ! -s "${SCORES_FILE}" ]; then
+    echo "No scores recorded yet."
+    return
+  fi
+
+  echo "=== Recent Scores (last 10) ==="
+  echo ""
+  printf '%-20s %-20s %-8s %-10s %-12s %-6s %-10s %-6s %-6s\n' \
+    "Start" "End" "Rotate" "Lockdown" "Seed" "SLv" "Score" "Lv" "Lines"
+  printf '%s\n' "$(awk -F'\t' '{printf "%-20s %-20s %-8s %-10s %-12s %-6s %-10s %-6s %-6s\n", $1,$2,$3,$4,$5,$6,$7,$8,$9}' "${SCORES_FILE}" | tail -n 10)"
+
+  echo ""
+  echo "=== High Scores by Mode ==="
+  echo ""
+  printf '%-8s %-10s %-10s %-6s %-6s\n' "Rotate" "Lockdown" "Score" "Lv" "Lines"
+  awk -F'\t' '
+  {
+    mode = $3 "\t" $4
+    if (!(mode in best) || $7+0 > best[mode]+0) {
+      best[mode] = $7
+      best_lv[mode] = $8
+      best_lines[mode] = $9
+    }
+  }
+  END {
+    for (mode in best) {
+      split(mode, parts, "\t")
+      printf "%-8s %-10s %-10s %-6s %-6s\n", parts[1], parts[2], best[mode], best_lv[mode], best_lines[mode]
+    }
+  }' "${SCORES_FILE}" 2>/dev/null
+}
+
 init() {
   local x=0 y=0 i=0
 
@@ -2503,6 +2564,8 @@ game() {
     143) return ;; # When CTRL-C is pressed, do nothing and return.
   esac
 
+  save_score
+
   # Prevent the input after the game over from being output to the terminal.
   printf "$EXIT_FORMAT" "Press enter to continue ..."
   read _
@@ -2601,6 +2664,10 @@ main() {
         help_on=false
         shift; continue
         ;;
+      --scores)
+        show_scores
+        exit
+        ;;
       --help|-h)    echo "$USAGE";   exit ;;
       --version|-V) echo "$VERSION"; exit ;;
       *)            die_usage "unrecognized option '$1'" ;;
@@ -2608,6 +2675,7 @@ main() {
   done
 
   $debug echo "=== Debug mode enabled ==="
+  game_start_time=$(date '+%Y-%m-%dT%H:%M:%S' 2>/dev/null) || game_start_time="unknown"
   initialize
   ( game 2>&1 >&3 | errlogger ) 3>&1
   cleanup
