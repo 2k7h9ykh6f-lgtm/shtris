@@ -498,7 +498,11 @@ Options:
                       RULE can be 'extended'(default), 'infinite', 'classic'
  --seed <SEED>        random seed to determine the order of Tetriminos.
                       range from 1 to 4294967295.
- --theme <THEME>      color theme 'standard'(default), 'system'
+ --theme <THEME>      color theme: 'standard'(default), 'system', 'mono',
+                      'high-contrast', 'pastel'
+                      mono: monochrome for colorless terminals
+                      high-contrast: maximum visibility for pieces and border
+                      pastel: soft muted colors
  --no-color           don't display colors
  --no-beep            disable beep
  --hide-help          don't show help on start
@@ -673,6 +677,9 @@ str_rpad() {
 switch_color_theme() {
   local i=''
 
+  # --no-color takes priority: skip theme loading entirely
+  "$no_color" && return
+
   SCORE_COLOR='' HELP_COLOR='' BORDER_COLOR='' FLASH_COLOR='' HOLD_COLOR=''
   eval "TETRIMINO_${EMPTY}_COLOR=''"
   for i in I J L O S T Z; do
@@ -763,6 +770,63 @@ color_theme_standard() {
   TETRIMINO_S_COLOR='38;5;70  48;5;70   38;5;70  49' # green      (r:1 g:3 b:0)
   TETRIMINO_T_COLOR='38;5;90  48;5;90   38;5;90  49' # purple     (r:2 g:0 b:2)
   TETRIMINO_Z_COLOR='38;5;160 48;5;160  38;5;160 49' # red        (r:4 g:0 b:0)
+}
+
+color_theme_mono() {
+  # Monochrome theme for terminals without color support.
+  # Uses brightness levels (bold white, dim, etc.) to distinguish pieces.
+  SCORE_COLOR='1 49' # bold (bright)
+  HELP_COLOR='1 49'  # bold (bright)
+  HOLD_COLOR='2 49'  # dim
+
+  BORDER_COLOR='1 49' # bold (bright) for high visibility
+  FLASH_COLOR='7 49'  # reverse video hint
+
+  TETRIMINO_I_COLOR='1 49 2 49' # bright  / dim
+  TETRIMINO_J_COLOR='1 49 2 49' # bright  / dim
+  TETRIMINO_L_COLOR='1 49 2 49' # bright  / dim
+  TETRIMINO_O_COLOR='1 49 2 49' # bright  / dim
+  TETRIMINO_S_COLOR='1 49 2 49' # bright  / dim
+  TETRIMINO_T_COLOR='1 49 2 49' # bright  / dim
+  TETRIMINO_Z_COLOR='1 49 2 49' # bright  / dim
+}
+
+color_theme_high_contrast() {
+  # High-contrast theme for maximum visibility.
+  # Uses bright/bold 16-color codes for strong foreground contrast.
+  SCORE_COLOR='92  49' # bright green
+  HELP_COLOR='93  49'  # bright yellow
+  HOLD_COLOR='90 100'  # bright black on bright black
+
+  BORDER_COLOR='97 49' # bright white for maximum border visibility
+  FLASH_COLOR=' 39 49' # default
+
+  TETRIMINO_I_COLOR='97  49  97  49' # bright white  / bright white (ghost)
+  TETRIMINO_J_COLOR='94  49  94  49' # bright blue   / bright blue  (ghost)
+  TETRIMINO_L_COLOR='91  49  91  49' # bright red    / bright red   (ghost)
+  TETRIMINO_O_COLOR='93  49  93  49' # bright yellow / bright yellow (ghost)
+  TETRIMINO_S_COLOR='92  49  92  49' # bright green  / bright green (ghost)
+  TETRIMINO_T_COLOR='95  49  95  49' # bright magenta/ bright magenta (ghost)
+  TETRIMINO_Z_COLOR='91  49  91  49' # bright red    / bright red   (ghost)
+}
+
+color_theme_pastel() {
+  # Pastel theme with soft, muted colors.
+  # Uses 256-color codes for gentle hues.
+  SCORE_COLOR='38;5;114 49'       # soft green  (r:2 g:4 b:2)
+  HELP_COLOR='38;5;223  49'       # soft pink   (r:5 g:4 b:4)
+  HOLD_COLOR='38;5;245  48;5;245' # gray
+
+  BORDER_COLOR='38;5;250 49' # light gray (r:5 g:4 b:4 on 6x6x6 cube)
+  FLASH_COLOR='39 49'        # default
+
+  TETRIMINO_I_COLOR='38;5;189 48;5;189  38;5;189 49' # lavender   (r:4 g:4 b:5)
+  TETRIMINO_J_COLOR='38;5;110 48;5;110  38;5;110 49' # steel blue (r:2 g:3 b:4)
+  TETRIMINO_L_COLOR='38;5;216 48;5;216  38;5;216 49' # peach      (r:5 g:3 b:4)
+  TETRIMINO_O_COLOR='38;5;229 48;5;229  38;5;229 49' # cream      (r:5 g:5 b:3)
+  TETRIMINO_S_COLOR='38;5;157 48;5;157  38;5;157 49' # mint       (r:3 g:5 b:4)
+  TETRIMINO_T_COLOR='38;5;182 48;5;182  38;5;182 49' # mauve      (r:4 g:3 b:4)
+  TETRIMINO_Z_COLOR='38;5;210 48;5;210  38;5;210 49' # rose       (r:5 g:2 b:3)
 }
 
 # screen_buffer is variable, that accumulates all screen changes
@@ -2584,7 +2648,10 @@ main() {
           die_usage "option '$1' requires an argument"
         }
         case $2 in
-          system | standard) theme=$2 ;;
+          system | standard)          theme=$2 ;;
+          mono)                       theme=$2 ;;
+          high-contrast|high_contrast) theme=high_contrast ;;
+          pastel)                     theme=$2 ;;
           *) die_usage "unrecognized color theme '$2'" ;;
         esac
         shift 2; continue
@@ -2606,6 +2673,9 @@ main() {
       *)            die_usage "unrecognized option '$1'" ;;
     esac
   done
+
+  # --no-color takes priority over --theme
+  # (switch_color_theme also checks no_color; set_color suppresses all color output)
 
   $debug echo "=== Debug mode enabled ==="
   initialize
