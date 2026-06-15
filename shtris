@@ -491,6 +491,8 @@ Usage: $PROG [options]
 Options:
  -d, --debug          debug mode
  -l, --level <LEVEL>  game level (default=1). range from 1 to $LEVEL_MAX
+ --mode <MODE>        game mode 'marathon'(default) or 'sprint'.
+                      sprint: clear 40 lines as fast as possible.
  --rotation <MODE>    use 'Super' or 'Classic' rotation system
                       MODE can be 'super'(default) or 'classic'
  --lockdown <RULE>    Three rulesets -Infinite Placement, Extended, and Classic-
@@ -545,6 +547,10 @@ bag_random=0
 # Clears awarded for any action is directly based off the score of the action performed (score
 # at level 1 / 100 = Total Line Clears
 adding_lines_per_level=5
+
+# 40 Line Sprint mode goal: the player must clear this many lines as fast as
+# possible. Used only when mode=sprint; marathon mode ignores it.
+SPRINT_GOAL_LINES=40
 
 # There is a special bonus for Back-to-Backs, which is when two actions
 # such as a Tetris and T-Spin Double take place without a Single, Double, or Triple Line Clear
@@ -627,6 +633,13 @@ theme='standard'
 lands_on=false
 pause=false
 gameover=false
+
+# game mode: 'marathon' (default) or 'sprint'. set via --mode.
+mode='marathon'
+# sprint: epoch seconds when the run started (set in init after the countdown).
+start_time=0
+# sprint: number of Tetriminos locked down (placed) so far.
+pieces=0
 
 # Game Over Conditions
 #
@@ -986,6 +999,9 @@ reset_level() {
   while [ "$level" -lt "$starting_level" ]; do
     increment_level
   done
+  # sprint mode keeps a fixed level and a fixed line goal instead of the
+  # Variable Goal System; overwrite the goal accumulated above with the target.
+  [ "$mode" = sprint ] && goal=$SPRINT_GOAL_LINES
   # send reset level signal to ticker (please see ticker for more details)
   send_signal "$SIGNAL_RESET_LEVEL" "$ticker_pid"
 }
@@ -1283,6 +1299,7 @@ process_fallen_piece() {
 
   $perfect_clear && clear_perfect_clear
   flatten_playfield
+  pieces=$((pieces + 1)) # count the locked-down Tetrimino (used for sprint stats)
 
   # There should be a line clear between current_y - 4 ~ current_y
   process_complete_lines $((current_piece_y - 4)) $current_piece_y
@@ -1332,7 +1349,12 @@ draw_scoreboard() {
   xyprint "$SCORE_X" $((SCORE_Y + 2)) "│"
   xyprint "$SCORE_X" $((SCORE_Y + 3)) "│LINES"
   xyprint "$SCORE_X" $((SCORE_Y + 4)) "│LEVEL"
-  xyprint "$SCORE_X" $((SCORE_Y + 5)) "│GOAL"
+  if [ "$mode" = sprint ]; then
+    xyprint "$SCORE_X" $((SCORE_Y + 5)) "│LEFT"
+    xyprint "$SCORE_X" $((SCORE_Y + 6)) "│TIME"
+  else
+    xyprint "$SCORE_X" $((SCORE_Y + 5)) "│GOAL"
+  fi
   reset_colors
 }
 
@@ -1501,7 +1523,11 @@ update_score_on_completion() {
   score=$((score + score_to_add))
   lines_completed=$((lines_completed + lines_to_add))
 
-  [ "$lines_completed" -ge "$goal" ] && level_up
+  [ "$lines_completed" -ge "$goal" ] && {
+    # sprint stays at a fixed level; reaching the goal ends the run (handled in
+    # lockdown via victory()), so it must not level up here.
+    [ "$mode" = sprint ] || level_up
+  }
 
   draw_score
 
@@ -1509,6 +1535,8 @@ update_score_on_completion() {
 }
 
 draw_score() {
+  local remaining=0
+
   set_style bold
   set_color "$SCORE_COLOR"
   xyprint $((SCORE_X + 1)) $((SCORE_Y + 1)) "$score"
@@ -1516,8 +1544,65 @@ draw_score() {
   xyprint $((SCORE_X + 8)) $((SCORE_Y + 3)) "$text"
   str_lpad text "$level" 4
   xyprint $((SCORE_X + 8)) $((SCORE_Y + 4)) "$text"
-  str_lpad text "$goal" 4
+  if [ "$mode" = sprint ]; then
+    # show the lines remaining to the sprint goal (clamped at 0)
+    remaining=$((goal - lines_completed))
+    [ "$remaining" -lt 0 ] && remaining=0
+    str_lpad text "$remaining" 4
+  else
+    str_lpad text "$goal" 4
+  fi
   xyprint $((SCORE_X + 8)) $((SCORE_Y + 5)) "$text"
+  reset_colors
+}
+
+# Draw the live elapsed time (MM:SS) on the sprint scoreboard.
+# Called frequently (once per controller command) while mode=sprint.
+draw_sprint_time() {
+  local elapsed=0 mm=0 ss=0
+
+  elapsed=$(($(date +%s) - start_time))
+  [ "$elapsed" -lt 0 ] && elapsed=0
+  mm=$((elapsed / 60))
+  ss=$((elapsed % 60))
+  [ "$mm" -lt 10 ] && mm="0$mm"
+  [ "$ss" -lt 10 ] && ss="0$ss"
+
+  set_style bold
+  set_color "$SCORE_COLOR"
+  str_rpad text "$mm:$ss" 5
+  xyprint $((SCORE_X + 8)) $((SCORE_Y + 6)) "$text"
+  reset_colors
+}
+
+# Draw the sprint result panel over the playfield once the goal is reached:
+# elapsed time, pieces used, lines per minute, and the final score.
+draw_sprint_result() {
+  local y=0 line='' elapsed=0 mm=0 ss=0 lpm10=0
+
+  # clear the playfield area so the result panel is readable
+  str_repeat line "  " "$PLAYFIELD_W"
+  while [ "$y" -lt "$PLAYFIELD_H" ]; do
+    xyprint "$PLAYFIELD_X" $((PLAYFIELD_Y + y)) "$line"
+    y=$((y + 1))
+  done
+
+  elapsed=$(($(date +%s) - start_time))
+  [ "$elapsed" -lt 1 ] && elapsed=1 # avoid divide-by-zero on sub-second runs
+  mm=$((elapsed / 60))
+  ss=$((elapsed % 60))
+  [ "$mm" -lt 10 ] && mm="0$mm"
+  [ "$ss" -lt 10 ] && ss="0$ss"
+  # lines per minute, kept to one decimal place (tenths)
+  lpm10=$((lines_completed * 600 / elapsed))
+
+  set_style bold
+  set_color "$SCORE_COLOR"
+  xyprint $((CENTER_X - 3)) $((CENTER_Y - 3)) 'FINISH!'
+  xyprint $((PLAYFIELD_X + 1)) $((CENTER_Y - 1)) "TIME   $mm:$ss"
+  xyprint $((PLAYFIELD_X + 1)) "$CENTER_Y"       "PIECES $pieces"
+  xyprint $((PLAYFIELD_X + 1)) $((CENTER_Y + 1)) "L/MIN  $((lpm10 / 10)).$((lpm10 % 10))"
+  xyprint $((PLAYFIELD_X + 1)) $((CENTER_Y + 2)) "SCORE  $score"
   reset_colors
 }
 
@@ -1689,6 +1774,11 @@ lockdown() {
   stop_lockdown_timer
 
   process_fallen_piece # let's finalize this piece
+
+  # sprint mode: clearing the goal lines ends the run with a victory result.
+  [ "$mode" = sprint ] && [ "$lines_completed" -ge "$goal" ] && {
+    victory; return
+  }
 
   test_lockout && { # a whole Tetrimino Locks Down above the Skyline - Game Over
     # now lets sub process continue...
@@ -2197,6 +2287,16 @@ quit() {
   flush_screen
 }
 
+# Sprint mode: the player cleared the target lines. End the run successfully and
+# show the result panel. We reuse the gameover flag so that the controller stops
+# and the existing "press enter to continue" prompt is shown (see controller/game).
+victory() {
+  gameover=true
+  running=false
+  draw_sprint_result
+  flush_screen
+}
+
 init() {
   local x=0 y=0 i=0
 
@@ -2231,6 +2331,11 @@ init() {
   redraw_screen
 
   ready
+
+  # sprint: start the clock after the countdown and render the initial 00:00.
+  pieces=0
+  start_time=$(date +%s)
+  [ "$mode" = sprint ] && draw_sprint_time
 
   wakeup_ticker
   capture_input
@@ -2472,6 +2577,7 @@ controller() {
     read cmd                   # read next command from stdout
     "$pause" && [ "$cmd" -ne "$PAUSE" ] && continue
     eval "\"\$commands_$cmd\"" # run command
+    [ "$mode" = sprint ] && draw_sprint_time # keep the elapsed-time display live
     flush_screen
   done
 
@@ -2540,6 +2646,16 @@ main() {
         }
 
         starting_level=$2
+        shift 2; continue
+        ;;
+      --mode)
+        [ $# -le 1 ] && { # if next arg not exists
+          die_usage "option '$1' requires an argument"
+        }
+        case $2 in
+          marathon | sprint) mode=$2 ;;
+          *) die_usage "unrecognized mode '$2'" ;;
+        esac
         shift 2; continue
         ;;
       --rotation)
