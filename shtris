@@ -498,7 +498,9 @@ Options:
                       RULE can be 'extended'(default), 'infinite', 'classic'
  --seed <SEED>        random seed to determine the order of Tetriminos.
                       range from 1 to 4294967295.
- --theme <THEME>      color theme 'standard'(default), 'system'
+ --theme <THEME>      color theme. THEME can be 'standard'(default),
+                      'system', 'mono', 'high-contrast', 'pastel'.
+                      '--no-color' takes precedence over '--theme'.
  --no-color           don't display colors
  --no-beep            disable beep
  --hide-help          don't show help on start
@@ -763,6 +765,67 @@ color_theme_standard() {
   TETRIMINO_S_COLOR='38;5;70  48;5;70   38;5;70  49' # green      (r:1 g:3 b:0)
   TETRIMINO_T_COLOR='38;5;90  48;5;90   38;5;90  49' # purple     (r:2 g:0 b:2)
   TETRIMINO_Z_COLOR='38;5;160 48;5;160  38;5;160 49' # red        (r:4 g:0 b:0)
+}
+
+# Monochrome theme.
+# Intended for terminals without color support: every element uses the
+# terminal's default foreground/background, so pieces are told apart by their
+# cell glyphs ([], _], ░░) rather than by color. (Use --no-color to suppress
+# escape codes entirely; this theme keeps them but emits only default colors.)
+color_theme_mono() {
+  SCORE_COLOR=' 39 49' # default
+  HELP_COLOR='  39 49' # default
+  HOLD_COLOR='  39 49' # default
+
+  BORDER_COLOR='39 49' # default
+  FLASH_COLOR=' 39 49' # default
+
+  TETRIMINO_I_COLOR='39 49  39 49' # default
+  TETRIMINO_J_COLOR='39 49  39 49' # default
+  TETRIMINO_L_COLOR='39 49  39 49' # default
+  TETRIMINO_O_COLOR='39 49  39 49' # default
+  TETRIMINO_S_COLOR='39 49  39 49' # default
+  TETRIMINO_T_COLOR='39 49  39 49' # default
+  TETRIMINO_Z_COLOR='39 49  39 49' # default
+}
+
+# High-contrast theme.
+# Vivid, fully-saturated piece colors with a bright bold border and more
+# visible ghost pieces. Assumes a 256-color terminal.
+color_theme_high_contrast() {
+  SCORE_COLOR='38;5;46  49'        # bright green
+  HELP_COLOR=' 38;5;226 49'        # bright yellow
+  HOLD_COLOR=' 38;5;250 48;5;238'  # light gray on dark gray
+
+  BORDER_COLOR='38;5;231 49'       # bright white (bold applied in draw_border)
+  FLASH_COLOR=' 38;5;231 49'       # bright white
+
+  TETRIMINO_I_COLOR='38;5;51  48;5;51   38;5;51  49' # vivid cyan
+  TETRIMINO_J_COLOR='38;5;21  48;5;21   38;5;21  49' # vivid blue
+  TETRIMINO_L_COLOR='38;5;208 48;5;208  38;5;208 49' # vivid orange
+  TETRIMINO_O_COLOR='38;5;226 48;5;226  38;5;226 49' # vivid yellow
+  TETRIMINO_S_COLOR='38;5;46  48;5;46   38;5;46  49' # vivid green
+  TETRIMINO_T_COLOR='38;5;201 48;5;201  38;5;201 49' # vivid magenta
+  TETRIMINO_Z_COLOR='38;5;196 48;5;196  38;5;196 49' # vivid red
+}
+
+# Pastel theme.
+# Soft, light, desaturated colors. Assumes a 256-color terminal.
+color_theme_pastel() {
+  SCORE_COLOR='38;5;157 49'        # soft green
+  HELP_COLOR=' 38;5;223 49'        # soft peach
+  HOLD_COLOR=' 38;5;188 48;5;188'  # light gray
+
+  BORDER_COLOR='38;5;188 49'       # light gray
+  FLASH_COLOR=' 38;5;231 49'       # white
+
+  TETRIMINO_I_COLOR='38;5;152 48;5;152  38;5;152 49' # pale cyan
+  TETRIMINO_J_COLOR='38;5;111 48;5;111  38;5;111 49' # soft blue
+  TETRIMINO_L_COLOR='38;5;216 48;5;216  38;5;216 49' # peach
+  TETRIMINO_O_COLOR='38;5;229 48;5;229  38;5;229 49' # pale yellow
+  TETRIMINO_S_COLOR='38;5;157 48;5;157  38;5;157 49' # mint
+  TETRIMINO_T_COLOR='38;5;183 48;5;183  38;5;183 49' # lavender
+  TETRIMINO_Z_COLOR='38;5;217 48;5;217  38;5;217 49' # light pink
 }
 
 # screen_buffer is variable, that accumulates all screen changes
@@ -2584,7 +2647,8 @@ main() {
           die_usage "option '$1' requires an argument"
         }
         case $2 in
-          system | standard) theme=$2 ;;
+          standard | system | mono | pastel) theme=$2 ;;
+          high-contrast)                      theme=high_contrast ;;
           *) die_usage "unrecognized color theme '$2'" ;;
         esac
         shift 2; continue
