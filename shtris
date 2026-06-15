@@ -503,6 +503,7 @@ Options:
  --no-beep            disable beep
  --hide-help          don't show help on start
 
+ --scores       display recent scores and the best score per mode, then exit
  -h, --help     display this help and exit
  -V, --version  output version infromation and exit
 
@@ -627,6 +628,13 @@ theme='standard'
 lands_on=false
 pause=false
 gameover=false
+
+# Path to the local high-score log. One record is appended on each Game Over.
+# Falls back to ~/.shtris-scores; override with SHTRIS_SCORES_FILE (handy for testing).
+SCORES_FILE="${SHTRIS_SCORES_FILE:-${HOME:-}/.shtris-scores}"
+
+# ISO-8601 local time when the current game started. Set in init().
+game_start_time='-'
 
 # Game Over Conditions
 #
@@ -2186,8 +2194,89 @@ toggle_color() {
   redraw_screen
 }
 
+# Print the recent games and the best score per mode, then return.
+# Used by the --scores option; reads SCORES_FILE only and never touches the
+# terminal or starts the game. Missing/empty logs are handled gracefully.
+show_scores() {
+  local file="$SCORES_FILE" count=0
+
+  [ -f "$file" ] || {
+    echo "No score records yet ($file)."
+    return 0
+  }
+
+  count=$(grep -c -v '^#' "$file" 2>/dev/null)
+  [ "${count:-0}" -gt 0 ] 2>/dev/null || {
+    echo "No completed games recorded in $file."
+    return 0
+  }
+
+  echo "Recent games (newest last) - $file"
+  printf '  %-17s %8s %5s %6s %-11s %-19s %-19s\n' \
+    MODE SCORE LEVEL LINES SEED START END
+  grep -v '^#' "$file" 2>/dev/null | tail -n 10 |
+    while IFS=' ' read -r mode score level lines seed rotation lockdown start end; do
+      [ -n "$mode" ] || continue
+      printf '  %-17s %8s %5s %6s %-11s %-19s %-19s\n' \
+        "$mode" "$score" "$level" "$lines" "$seed" "$start" "$end"
+    done
+
+  echo
+  echo "Best score per mode:"
+  printf '  %-17s %8s %5s %6s %-19s\n' MODE SCORE LEVEL LINES WHEN
+  grep -v '^#' "$file" 2>/dev/null |
+    awk '{ if (!($1 in best) || ($2 + 0) > (best[$1] + 0)) { best[$1] = $2; rec[$1] = $0 } }
+         END { for (m in best) print rec[m] }' |
+    sort |
+    while IFS=' ' read -r mode score level lines seed rotation lockdown start end; do
+      [ -n "$mode" ] || continue
+      printf '  %-17s %8s %5s %6s %-19s\n' \
+        "$mode" "$score" "$level" "$lines" "$end"
+    done
+}
+
+# Append one record describing the finished game to SCORES_FILE.
+# Read/write failures are ignored so they never disrupt the game.
+#
+# Record format (single line, space-separated; easy to parse with `read`/awk):
+#   <mode> <score> <level> <lines> <seed> <rotation> <lockdown> <start> <end>
+#     mode  - "<rotation>-<lockdown>", e.g. super-extended
+#     start - ISO-8601 local time the game started
+#     end   - ISO-8601 local time of Game Over
+#   (timestamps contain no spaces, so they stay a single field)
+write_score_record() {
+  local rotation='' lockdown='' mode='' end_time='' need_header=false
+
+  case $rotate_piece_func in
+    rotate_piece_classic) rotation=classic ;;
+    *)                    rotation=super ;;
+  esac
+
+  case $lockdown_rule in
+    "$LOCKDOWN_RULE_INFINITE") lockdown=infinite ;;
+    "$LOCKDOWN_RULE_CLASSIC")  lockdown=classic ;;
+    *)                         lockdown=extended ;;
+  esac
+
+  mode="${rotation}-${lockdown}"
+  end_time=$(date +%Y-%m-%dT%H:%M:%S 2>/dev/null) || end_time='-'
+
+  # Decide on the header *before* the redirection below creates the file,
+  # so the header line is written exactly once (on first creation).
+  [ -f "$SCORES_FILE" ] || need_header=true
+
+  {
+    $need_header &&
+      printf '%s\n' "# shtris scores v1: mode score level lines seed rotation lockdown start end"
+    printf '%s %s %s %s %s %s %s %s %s\n' \
+      "$mode" "$score" "$level" "$lines_completed" "$bag_random" \
+      "$rotation" "$lockdown" "$game_start_time" "$end_time"
+  } >> "$SCORES_FILE" 2>/dev/null || :
+}
+
 gameover() {
   gameover=true
+  write_score_record
   quit
 }
 
@@ -2199,6 +2288,9 @@ quit() {
 
 init() {
   local x=0 y=0 i=0
+
+  # Record when this game starts, for the score log (ignore failures).
+  game_start_time=$(date +%Y-%m-%dT%H:%M:%S 2>/dev/null) || game_start_time='-'
 
   switch_color_theme "$theme"
 
@@ -2601,6 +2693,7 @@ main() {
         help_on=false
         shift; continue
         ;;
+      --scores)     show_scores;   exit ;;
       --help|-h)    echo "$USAGE";   exit ;;
       --version|-V) echo "$VERSION"; exit ;;
       *)            die_usage "unrecognized option '$1'" ;;
