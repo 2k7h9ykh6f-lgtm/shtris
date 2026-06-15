@@ -498,6 +498,10 @@ Options:
                       RULE can be 'extended'(default), 'infinite', 'classic'
  --seed <SEED>        random seed to determine the order of Tetriminos.
                       range from 1 to 4294967295.
+ --daily              daily challenge mode. generates a stable seed from
+                      the local date (YYYY-MM-DD). forces level 1, super
+                      rotation, extended lockdown, and color on.
+                      conflicts with --seed.
  --theme <THEME>      color theme 'standard'(default), 'system'
  --no-color           don't display colors
  --no-beep            disable beep
@@ -627,6 +631,9 @@ theme='standard'
 lands_on=false
 pause=false
 gameover=false
+daily=false                    # daily challenge mode
+daily_date=''                  # date string for daily challenge (YYYY-MM-DD)
+daily_seed_value=0             # seed generated from date
 
 # Game Over Conditions
 #
@@ -919,6 +926,23 @@ terminate_process() {
 # (if not, considering to use `ps` as seed)
 rand() {
   od -A n -t u4 -N 4 /dev/urandom | sed 's/[^0-9]//g; s/^0*//'
+}
+
+# Generate a stable seed from the local date (YYYY-MM-DD).
+# Uses POSIX cksum (CRC-32) to produce a deterministic 32-bit integer.
+# The result is the same for the same date on any POSIX-compliant system.
+# Output: sets daily_seed_value to a value in 1..4294967295.
+daily_seed() {
+  local date_str='' seed_val=0
+  date_str=$(date +%Y-%m-%d 2>/dev/null) || date_str=$(date +%F 2>/dev/null) || {
+    # fallback: construct from individual fields
+    date_str="$(date +%Y)-$(date +%m)-$(date +%d)"
+  }
+  daily_date="$date_str"
+  seed_val=$(printf '%s' "$date_str" | cksum 2>/dev/null | awk '{print $1}')
+  # cksum returns 0..4294967295; map 0 to 1 since 0 means "not set" in bag_random
+  [ "${seed_val:-0}" -eq 0 ] 2>/dev/null && seed_val=1
+  daily_seed_value="$seed_val"
 }
 
 # Generate next random value
@@ -1333,6 +1357,10 @@ draw_scoreboard() {
   xyprint "$SCORE_X" $((SCORE_Y + 3)) "│LINES"
   xyprint "$SCORE_X" $((SCORE_Y + 4)) "│LEVEL"
   xyprint "$SCORE_X" $((SCORE_Y + 5)) "│GOAL"
+  "$daily" && {
+    xyprint "$SCORE_X" $((SCORE_Y + 6)) "│DAILY"
+    xyprint "$SCORE_X" $((SCORE_Y + 7)) "│$daily_date"
+  }
   reset_colors
 }
 
@@ -1518,6 +1546,9 @@ draw_score() {
   xyprint $((SCORE_X + 8)) $((SCORE_Y + 4)) "$text"
   str_lpad text "$goal" 4
   xyprint $((SCORE_X + 8)) $((SCORE_Y + 5)) "$text"
+  "$daily" && {
+    xyprint $((SCORE_X + 1)) $((SCORE_Y + 8)) "seed:$bag_random"
+  }
   reset_colors
 }
 
@@ -2194,6 +2225,13 @@ gameover() {
 quit() {
   running=false # let's stop controller ...
   xyprint $((CENTER_X - 5)) $CENTER_Y 'Game Over!'
+  "$daily" && {
+    set_style bold
+    xyprint $((CENTER_X - 8)) $((CENTER_Y + 2)) "[DAILY $daily_date]"
+    xyprint $((CENTER_X - 6)) $((CENTER_Y + 3)) "seed: $bag_random"
+    xyprint $((CENTER_X - 5)) $((CENTER_Y + 4)) "score: $score"
+    reset_colors
+  }
   flush_screen
 }
 
@@ -2280,6 +2318,21 @@ receive_pids() {
 }
 
 ready() {
+  "$daily" && {
+    # Show daily challenge info on start screen
+    set_style bold
+    xyprint $((CENTER_X - 8)) $((CENTER_Y - 2)) 'Daily Challenge'
+    xyprint $((CENTER_X - 5)) $((CENTER_Y - 1)) "$daily_date"
+    xyprint $((CENTER_X - 7)) "$CENTER_Y"       "seed: $bag_random"
+    reset_colors
+    flush_screen
+    sleep 2
+    # Clear daily info before showing READY
+    xyprint $((CENTER_X - 8)) $((CENTER_Y - 2)) '               '
+    xyprint $((CENTER_X - 5)) $((CENTER_Y - 1)) '          '
+    xyprint $((CENTER_X - 7)) "$CENTER_Y"       '                '
+  }
+
   # show 'READY' for 1 second.
   xyprint $((CENTER_X - 3)) $CENTER_Y 'READY'
   flush_screen
@@ -2520,6 +2573,7 @@ main() {
   rotate_piece_func=rotate_piece_super
   starting_level=1
   debug=false
+  seed_explicit=false
 
   while [ $# -gt 0 ]; do
     case $1 in
@@ -2577,6 +2631,7 @@ main() {
           die_usage "invalid seed '$2'"
         }
         bag_random=$2
+        seed_explicit=true
         shift 2; continue
         ;;
       --theme)
@@ -2601,11 +2656,29 @@ main() {
         help_on=false
         shift; continue
         ;;
+      --daily)
+        daily=true
+        shift; continue
+        ;;
       --help|-h)    echo "$USAGE";   exit ;;
       --version|-V) echo "$VERSION"; exit ;;
       *)            die_usage "unrecognized option '$1'" ;;
     esac
   done
+
+  # Post-process daily challenge mode
+  "$daily" && {
+    "$seed_explicit" && die_usage "--daily conflicts with explicit --seed"
+
+    daily_seed
+    bag_random=$daily_seed_value
+
+    # Force fixed rules for daily challenge
+    starting_level=1
+    rotate_piece_func=rotate_piece_super
+    lockdown_rule=$LOCKDOWN_RULE_EXTENDED
+    no_color=false
+  }
 
   $debug echo "=== Debug mode enabled ==="
   initialize
@@ -2638,6 +2711,17 @@ cleanup() {
   printf "$EXIT_FORMAT" "$msg"
   printf '\0338'     # restore cursor position
   printf '\033[?25h' # show cursor
+
+  # Display daily challenge summary
+  "$daily" && {
+    printf '\n=== Daily Challenge Result ===\n'
+    printf 'Date:  %s\n' "$daily_date"
+    printf 'Seed:  %s\n' "$bag_random"
+    printf 'Score: %s\n' "$score"
+    printf 'Lines: %s\n' "$lines_completed"
+    printf 'Level: %s\n' "$level"
+    printf '==============================\n'
+  }
 
   "$interrupt" && exit 130 # SIGINT (2) + 128
   return 0
