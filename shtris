@@ -468,22 +468,7 @@ INACTIVE_CELL='_]'  # how we draw inactive cell
 GHOST_CELL='░░'     # how we draw ghost cell
 DRY_CELL='  '       # how we draw dry cell
 
-HELP="
-Move Left       ←
-Move Right      →
-Rotate Left     z
-Rotate Right    x, ↑
-Hold            c
-Soft Drop       ↓
-Hard Drop       Space
-${SP}
-Pause / Resume  TAB, F1
-Refresh Screen  R
-Toggle Color    C
-Toggle Beep     B
-Toggle Help     H
-Quit            Q, ESCx2
-"
+HELP=''
 
 USAGE="
 Usage: $PROG [options]
@@ -499,6 +484,11 @@ Options:
  --seed <SEED>        random seed to determine the order of Tetriminos.
                       range from 1 to 4294967295.
  --theme <THEME>      color theme 'standard'(default), 'system'
+ --keys <FILE>        load custom key bindings from FILE.
+                      Actions: left, right, soft_drop, hard_drop, rotate_cw,
+                      rotate_ccw, hold, pause, quit, help.
+                      Keys: a-z, A-Z, 0-9, space, tab, up, down,
+                      left_arrow, right_arrow, f1.
  --no-color           don't display colors
  --no-beep            disable beep
  --hide-help          don't show help on start
@@ -628,6 +618,25 @@ lands_on=false
 pause=false
 gameover=false
 
+# --- Keybinding Configuration ---
+# KEY_<ACTION>_PAT    - case pattern for reader() dispatch
+# KEY_<ACTION>_LABEL  - human-readable string for HELP display
+# KEY_<ACTION>_IS_ESC - "true" if pattern includes an escape sequence
+#
+# Set by init_key_defaults(), optionally overridden by parse_keyconfig().
+KEY_LEFT_PAT=''         KEY_LEFT_LABEL=''         KEY_LEFT_IS_ESC=false
+KEY_RIGHT_PAT=''        KEY_RIGHT_LABEL=''        KEY_RIGHT_IS_ESC=false
+KEY_ROTATE_CW_PAT=''    KEY_ROTATE_CW_LABEL=''    KEY_ROTATE_CW_IS_ESC=false
+KEY_ROTATE_CCW_PAT=''   KEY_ROTATE_CCW_LABEL=''   KEY_ROTATE_CCW_IS_ESC=false
+KEY_HOLD_PAT=''         KEY_HOLD_LABEL=''         KEY_HOLD_IS_ESC=false
+KEY_SOFT_DROP_PAT=''    KEY_SOFT_DROP_LABEL=''    KEY_SOFT_DROP_IS_ESC=false
+KEY_HARD_DROP_PAT=''    KEY_HARD_DROP_LABEL=''    KEY_HARD_DROP_IS_ESC=false
+KEY_PAUSE_PAT=''        KEY_PAUSE_LABEL=''        KEY_PAUSE_IS_ESC=false
+KEY_QUIT_PAT=''         KEY_QUIT_LABEL=''         KEY_QUIT_IS_ESC=false
+KEY_HELP_PAT=''         KEY_HELP_LABEL=''         KEY_HELP_IS_ESC=false
+
+keyconfig_file=''
+
 # Game Over Conditions
 #
 # Lock Out
@@ -668,6 +677,236 @@ str_rpad() {
     set -- "$1" "${2}${4}" "$3" "$4"
   done
   eval "$1=\$2"
+}
+
+# Trim leading and trailing spaces and tabs from a string.
+# Arguments:
+#   1 - variable name to store result
+#   2 - string to trim
+str_trim() {
+  eval "set -- \"\$1\" \"\${2%%[!${SP}${TAB}]*}\""
+  eval "set -- \"\$1\" \"\${2##*[!${SP}${TAB}]}\""
+  eval "$1=\${2#\"\$1\"}"
+}
+
+# Set default key bindings matching the original hardcoded patterns.
+init_key_defaults() {
+  KEY_LEFT_PAT='*[4] | *"${ESC}[D"'
+  KEY_LEFT_LABEL='←'
+  KEY_LEFT_IS_ESC=true
+
+  KEY_RIGHT_PAT='*[6] | *"${ESC}[C"'
+  KEY_RIGHT_LABEL='→'
+  KEY_RIGHT_IS_ESC=true
+
+  KEY_ROTATE_CW_PAT='*[x159] | *"${ESC}[A"'
+  KEY_ROTATE_CW_LABEL='x, ↑'
+  KEY_ROTATE_CW_IS_ESC=true
+
+  KEY_ROTATE_CCW_PAT='*[z37]'
+  KEY_ROTATE_CCW_LABEL='z'
+  KEY_ROTATE_CCW_IS_ESC=false
+
+  KEY_HOLD_PAT='*[c0]'
+  KEY_HOLD_LABEL='c'
+  KEY_HOLD_IS_ESC=false
+
+  KEY_SOFT_DROP_PAT='*[2] | *"${ESC}[B"'
+  KEY_SOFT_DROP_LABEL='↓'
+  KEY_SOFT_DROP_IS_ESC=true
+
+  KEY_HARD_DROP_PAT='*[8${SP}]'
+  KEY_HARD_DROP_LABEL='Space'
+  KEY_HARD_DROP_IS_ESC=false
+
+  KEY_PAUSE_PAT='*[${TAB}] | *"${ESC}OP"'
+  KEY_PAUSE_LABEL='TAB, F1'
+  KEY_PAUSE_IS_ESC=true
+
+  KEY_QUIT_PAT='*[Q] | *"${ESC}${ESC}"'
+  KEY_QUIT_LABEL='Q, ESCx2'
+  KEY_QUIT_IS_ESC=true
+
+  KEY_HELP_PAT='*[H]'
+  KEY_HELP_LABEL='H'
+  KEY_HELP_IS_ESC=false
+}
+
+# Convert a user config key name to a case pattern string.
+key_to_pattern() {
+  case "$1" in
+    space)       printf '*[${SP}]' ;;
+    tab)         printf '*[${TAB}]' ;;
+    up)          printf '*"${ESC}[A"' ;;
+    down)        printf '*"${ESC}[B"' ;;
+    left_arrow)  printf '*"${ESC}[D"' ;;
+    right_arrow) printf '*"${ESC}[C"' ;;
+    f1)          printf '*"${ESC}OP"' ;;
+    *)           printf '*[%s]' "$1" ;;
+  esac
+}
+
+# Convert a user config key name to a human-readable label.
+key_to_label() {
+  case "$1" in
+    space)       printf 'Space' ;;
+    tab)         printf 'TAB' ;;
+    up)          printf '↑' ;;
+    down)        printf '↓' ;;
+    left_arrow)  printf '←' ;;
+    right_arrow) printf '→' ;;
+    f1)          printf 'F1' ;;
+    *)           printf '%s' "$1" ;;
+  esac
+}
+
+# Return 0 if key name produces an escape sequence, 1 otherwise.
+key_is_escape() {
+  case "$1" in
+    up|down|left_arrow|right_arrow|f1) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Convert lowercase action name to uppercase variable-name component.
+action_to_upper() {
+  case "$1" in
+    left)        printf 'LEFT' ;;
+    right)       printf 'RIGHT' ;;
+    soft_drop)   printf 'SOFT_DROP' ;;
+    hard_drop)   printf 'HARD_DROP' ;;
+    rotate_cw)   printf 'ROTATE_CW' ;;
+    rotate_ccw)  printf 'ROTATE_CCW' ;;
+    hold)        printf 'HOLD' ;;
+    pause)       printf 'PAUSE' ;;
+    quit)        printf 'QUIT' ;;
+    help)        printf 'HELP' ;;
+  esac
+}
+
+# Validate that a key name from config is recognized.
+validate_key_name() {
+  case "$1" in
+    space|tab|up|down|left_arrow|right_arrow|f1) return 0 ;;
+    [a-zA-Z0-9]) return 0 ;;
+    *)
+      echo "$PROG: unknown key name '$1'" >&2
+      echo "  Valid keys: a-z, A-Z, 0-9, space, tab, up, down, left_arrow, right_arrow, f1" >&2
+      return 1
+      ;;
+  esac
+}
+
+# Parse a keybinding configuration file.
+# Overrides KEY_<ACTION>_{PAT,LABEL,IS_ESC} for each action found.
+# Actions not found retain defaults from init_key_defaults().
+parse_keyconfig() {
+  file="$1" line_num=0 line='' action='' key='' upper=''
+  valid_actions='left right soft_drop hard_drop rotate_cw rotate_ccw hold pause quit help'
+  CR="$(printf '\r')"
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    line_num=$((line_num + 1))
+
+    # Strip carriage return (Windows line endings)
+    line="${line%"$CR"}"
+
+    # Trim whitespace
+    str_trim line "$line"
+
+    # Skip blank lines and comments
+    case "$line" in
+      ''|'#'*) continue ;;
+    esac
+
+    # Must contain '='
+    case "$line" in
+      *=*) ;;
+      *) die_usage "syntax error in key config '$file' line $line_num: expected 'action = key'" ;;
+    esac
+
+    # Split on first '='
+    action="${line%%=*}"
+    key="${line#*=}"
+    str_trim action "$action"
+    str_trim key "$key"
+
+    # Validate action name
+    action_valid=false valid=''
+    for valid in $valid_actions; do
+      [ "$action" = "$valid" ] && { action_valid=true; break; }
+    done
+    "$action_valid" || die_usage "unknown action '$action' in '$file' line $line_num (valid: $valid_actions)"
+
+    # Validate key name
+    validate_key_name "$key" || die_usage "invalid key in '$file' line $line_num"
+
+    # Convert and store
+    upper=$(action_to_upper "$action")
+    eval "KEY_${upper}_PAT=\$(key_to_pattern \"\$key\")"
+    eval "KEY_${upper}_LABEL=\$(key_to_label \"\$key\")"
+    if key_is_escape "$key"; then
+      eval "KEY_${upper}_IS_ESC=true"
+    else
+      eval "KEY_${upper}_IS_ESC=false"
+    fi
+  done < "$file"
+}
+
+# Detect duplicate key bindings among configurable and hardcoded actions.
+check_key_conflicts() {
+  actions='left right soft_drop hard_drop rotate_cw rotate_ccw hold pause quit help'
+  action='' other='' key='' other_key='' upper='' other_upper=''
+
+  # Hardcoded non-configurable bindings
+  hardcoded='R:Refresh_screen C:Toggle_color B:Toggle_beep'
+  hc='' hc_key='' hc_name=''
+
+  for action in $actions; do
+    upper=$(action_to_upper "$action")
+    eval "key=\$KEY_${upper}_LABEL"
+
+    # Check against hardcoded keys
+    for hc in $hardcoded; do
+      hc_key="${hc%%:*}"
+      hc_name="${hc#*:}"
+      if [ "$key" = "$hc_key" ]; then
+        die_usage "key conflict: '$action' bound to '$key' conflicts with hardcoded $hc_name"
+      fi
+    done
+
+    # Check against other configurable actions
+    for other in $actions; do
+      [ "$other" = "$action" ] && continue
+      other_upper=$(action_to_upper "$other")
+      eval "other_key=\$KEY_${other_upper}_LABEL"
+      if [ "$key" = "$other_key" ]; then
+        die_usage "key conflict: '$key' bound to both '$action' and '$other'"
+      fi
+    done
+  done
+}
+
+# Build the HELP string dynamically from current key binding labels.
+build_helptext() {
+  l1='' l2='' l3='' l4='' l5='' l6='' l7=''
+  l8='' l9='' l10='' l11='' l12='' l13=''
+
+  str_rpad l1  'Move Left'       16; l1="${l1}${KEY_LEFT_LABEL}"
+  str_rpad l2  'Move Right'      16; l2="${l2}${KEY_RIGHT_LABEL}"
+  str_rpad l3  'Rotate Left'     16; l3="${l3}${KEY_ROTATE_CCW_LABEL}"
+  str_rpad l4  'Rotate Right'    16; l4="${l4}${KEY_ROTATE_CW_LABEL}"
+  str_rpad l5  'Hold'            16; l5="${l5}${KEY_HOLD_LABEL}"
+  str_rpad l6  'Soft Drop'       16; l6="${l6}${KEY_SOFT_DROP_LABEL}"
+  str_rpad l7  'Hard Drop'       16; l7="${l7}${KEY_HARD_DROP_LABEL}"
+  str_rpad l8  'Pause / Resume'  16; l8="${l8}${KEY_PAUSE_LABEL}"
+  str_rpad l9  'Refresh Screen'  16; l9="${l9}R"
+  str_rpad l10 'Toggle Color'    16; l10="${l10}C"
+  str_rpad l11 'Toggle Beep'     16; l11="${l11}B"
+  str_rpad l12 'Toggle Help'     16; l12="${l12}H"
+  str_rpad l13 'Quit'            16; l13="${l13}${KEY_QUIT_LABEL}"
+
+  HELP="${LF}${l1}${LF}${l2}${LF}${l3}${LF}${l4}${LF}${l5}${LF}${l6}${LF}${l7}${LF}${SP}${LF}${l8}${LF}${l9}${LF}${l10}${LF}${l11}${LF}${l12}${LF}${l13}${LF}"
 }
 
 switch_color_theme() {
@@ -2387,6 +2626,80 @@ reader() {
     get_pid my_pid
     send_cmd "$NOTIFY_PID $PROCESS_READER $my_pid"
 
+    # Build dispatch_key() from keybinding variables.
+    # Escape-sequence branches MUST precede single-char branches because
+    # single-char globs like *[A] match escape sequence terminators like ESC[A.
+    esc_branches=''
+    char_branches=''
+
+    if "$KEY_LEFT_IS_ESC"; then
+      esc_branches="${esc_branches}    ${KEY_LEFT_PAT}) send_cmd \"${LEFT}\" ;;${LF}"
+    else
+      char_branches="${char_branches}    ${KEY_LEFT_PAT}) send_cmd \"${LEFT}\" ;;${LF}"
+    fi
+    if "$KEY_RIGHT_IS_ESC"; then
+      esc_branches="${esc_branches}    ${KEY_RIGHT_PAT}) send_cmd \"${RIGHT}\" ;;${LF}"
+    else
+      char_branches="${char_branches}    ${KEY_RIGHT_PAT}) send_cmd \"${RIGHT}\" ;;${LF}"
+    fi
+    if "$KEY_ROTATE_CW_IS_ESC"; then
+      esc_branches="${esc_branches}    ${KEY_ROTATE_CW_PAT}) send_cmd \"${ROTATE_CW}\" ;;${LF}"
+    else
+      char_branches="${char_branches}    ${KEY_ROTATE_CW_PAT}) send_cmd \"${ROTATE_CW}\" ;;${LF}"
+    fi
+    if "$KEY_ROTATE_CCW_IS_ESC"; then
+      esc_branches="${esc_branches}    ${KEY_ROTATE_CCW_PAT}) send_cmd \"${ROTATE_CCW}\" ;;${LF}"
+    else
+      char_branches="${char_branches}    ${KEY_ROTATE_CCW_PAT}) send_cmd \"${ROTATE_CCW}\" ;;${LF}"
+    fi
+    if "$KEY_HOLD_IS_ESC"; then
+      esc_branches="${esc_branches}    ${KEY_HOLD_PAT}) send_cmd \"${HOLD}\" ;;${LF}"
+    else
+      char_branches="${char_branches}    ${KEY_HOLD_PAT}) send_cmd \"${HOLD}\" ;;${LF}"
+    fi
+    if "$KEY_SOFT_DROP_IS_ESC"; then
+      esc_branches="${esc_branches}    ${KEY_SOFT_DROP_PAT}) send_cmd \"${SOFT_DROP}\" ;;${LF}"
+    else
+      char_branches="${char_branches}    ${KEY_SOFT_DROP_PAT}) send_cmd \"${SOFT_DROP}\" ;;${LF}"
+    fi
+    if "$KEY_HARD_DROP_IS_ESC"; then
+      esc_branches="${esc_branches}    ${KEY_HARD_DROP_PAT}) send_cmd \"${HARD_DROP}\" ;;${LF}"
+    else
+      char_branches="${char_branches}    ${KEY_HARD_DROP_PAT}) send_cmd \"${HARD_DROP}\" ;;${LF}"
+    fi
+    if "$KEY_PAUSE_IS_ESC"; then
+      esc_branches="${esc_branches}    ${KEY_PAUSE_PAT}) send_cmd \"${PAUSE}\" ;;${LF}"
+    else
+      char_branches="${char_branches}    ${KEY_PAUSE_PAT}) send_cmd \"${PAUSE}\" ;;${LF}"
+    fi
+    if "$KEY_QUIT_IS_ESC"; then
+      esc_branches="${esc_branches}    ${KEY_QUIT_PAT}) send_cmd \"${QUIT}\"; return 1 ;;${LF}"
+    else
+      char_branches="${char_branches}    ${KEY_QUIT_PAT}) send_cmd \"${QUIT}\"; return 1 ;;${LF}"
+    fi
+    if "$KEY_HELP_IS_ESC"; then
+      esc_branches="${esc_branches}    ${KEY_HELP_PAT}) send_cmd \"${TOGGLE_HELP}\" ;;${LF}"
+    else
+      char_branches="${char_branches}    ${KEY_HELP_PAT}) send_cmd \"${TOGGLE_HELP}\" ;;${LF}"
+    fi
+
+    eval "
+    dispatch_key() {
+      case \"\$1\" in
+        *\"\${ESC}[1\" | *\"\${ESC}[1;\"[0-9] | *\"\${ESC}[1;\"[0-9][A-D]) return 0 ;;
+        *\"\${ESC}[1;\"[0-9][0-9] | *\"\${ESC}[1;\"[0-9][0-9][A-D]) return 0 ;;
+${esc_branches}
+        *\"\${ESC}[\"[A-Za-z]) return 0 ;;
+        *\"\${ESC}O\"[A-Za-z]) return 0 ;;
+${char_branches}
+        *[R]) send_cmd \"${REFRESH_SCREEN}\" ;;
+        *[C]) send_cmd \"${TOGGLE_COLOR}\" ;;
+        *[B]) send_cmd \"${TOGGLE_BEEP}\" ;;
+      esac
+      return 0
+    }
+    "
+
     key_sequence='-------' # preserve previous 7 keys
 
     while exist_process "$game_pid"; do
@@ -2406,25 +2719,7 @@ reader() {
 
       "$capture" || continue
 
-      case "$key_sequence" in
-        # Ignore (incompleted) modifier + arrow keys
-        *"${ESC}[1" | *"${ESC}[1;"[0-9] | *"${ESC}[1;"[0-9][A-D]) ;;
-        *"${ESC}[1;"[0-9][0-9] | *"${ESC}[1;"[0-9][0-9][A-D]) ;;
-
-        *[4]      | *"${ESC}[D") send_cmd "$LEFT"           ;; # Numpad 4, Left
-        *[6]      | *"${ESC}[C") send_cmd "$RIGHT"          ;; # Numpad 6, Right
-        *[x159]   | *"${ESC}[A") send_cmd "$ROTATE_CW"      ;; # x, Numpad 1 5 9, Up
-        *[z37]                 ) send_cmd "$ROTATE_CCW"     ;; # z, Numpad 3, 7
-        *[c0]                  ) send_cmd "$HOLD"           ;; # c, Numpad 0
-        *[2]      | *"${ESC}[B") send_cmd "$SOFT_DROP"      ;; # Numpad 2, Down
-        *[8${SP}]              ) send_cmd "$HARD_DROP"      ;; # Space Bar, Numpad 8
-        *[${TAB}] | *"${ESC}OP") send_cmd "$PAUSE"          ;; # TAB, F1
-        *[R]                   ) send_cmd "$REFRESH_SCREEN" ;; # R
-        *[C]                   ) send_cmd "$TOGGLE_COLOR"   ;; # C
-        *[B]                   ) send_cmd "$TOGGLE_BEEP"    ;; # B
-        *[H]                   ) send_cmd "$TOGGLE_HELP"    ;; # H
-        *[Q]  | *"${ESC}${ESC}") send_cmd "$QUIT"; break    ;; # Q, ESCx2
-      esac
+      dispatch_key "$key_sequence" || break
     done
   } 2>&3
 }
@@ -2589,6 +2884,13 @@ main() {
         esac
         shift 2; continue
         ;;
+      --keys)
+        [ $# -le 1 ] && { die_usage "option '$1' requires an argument"; }
+        [ -f "$2" ] || die_usage "key config file '$2' not found"
+        [ -r "$2" ] || die_usage "key config file '$2' is not readable"
+        keyconfig_file=$2
+        shift 2; continue
+        ;;
       --no-beep)
         beep_on=false
         shift; continue
@@ -2606,6 +2908,14 @@ main() {
       *)            die_usage "unrecognized option '$1'" ;;
     esac
   done
+
+  # Initialize key bindings
+  init_key_defaults
+  if [ -n "$keyconfig_file" ]; then
+    parse_keyconfig "$keyconfig_file"
+    check_key_conflicts
+  fi
+  build_helptext
 
   $debug echo "=== Debug mode enabled ==="
   initialize
